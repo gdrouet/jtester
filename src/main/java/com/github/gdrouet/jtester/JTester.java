@@ -24,7 +24,10 @@ import java.net.URL;
 import java.net.URLClassLoader;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.TreeMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -193,9 +196,21 @@ public class JTester {
         throw new IllegalArgumentException();
     }
 
+    /**
+     * <p>
+     * Scans the testing directory and executed discovered tests.
+     * </p>
+     *
+     * @param args arguments for 'main' method of test executor
+     * @throws IOException if test fails
+     */
     public void scanTest(final String[] args) throws IOException {
+        final Map<String, Map<Registration, Boolean>> results = new TreeMap<>();
+        print("Student", 20);
+
         // Execute all registered test for all discovered files to test
         for (final Registration registration : registrations) {
+            print(registration.step, 10);
 
             // Load expected result into a string for future comparison
             final String expected;
@@ -245,11 +260,11 @@ public class JTester {
                                 content = content.substring(0, index) + content.substring(content.indexOf(';', index) + 1);
                             }
 
-                            // No import is necessary in file to test, put others in top of file
+                            // No java.* import is necessary, put others in top of file
                             while ((index = content.indexOf("import")) != -1) {
                                 String importStatement = content.substring(index, content.indexOf(';', index) + 1);
 
-                                if (!isFileToTest) {
+                                if (importStatement.contains("java.")) {
                                     compile.insert(0, importStatement);
                                 }
 
@@ -330,11 +345,8 @@ public class JTester {
                             final Method main = clazz.getMethod("main", argTypes);
                             main.invoke(null, passedArgs);
                         } catch (MalformedURLException e) {
-                            e.printStackTrace();
                         } catch (ClassNotFoundException e) {
-                            e.printStackTrace();
                         } catch (Exception ex) {
-                            ex.printStackTrace();
                         } finally {
                             System.setOut(std);
                         }
@@ -342,13 +354,46 @@ public class JTester {
                         // Checks expected result
                         final String result = new String(os.toByteArray()).replace("\n", "").replace("\r", "");
 
-                        // TODO: make report file
-                        if (!registration.expectationImpl.isResultExpected(expected, result)) {
-                            System.out.println("Test " + registration.step + " fails for " + student);
+                        // Report result
+                        Map<Registration, Boolean> line = results.get(student);
+
+                        if (line == null) {
+                            line = new HashMap<>();
+                            results.put(student, line);
                         }
+
+                        line.put(registration, registration.expectationImpl.isResultExpected(expected, result));
                     }
                 }
             }
         }
+
+        // Print reported result
+        for (final Map.Entry<String, Map<Registration, Boolean>> entry : results.entrySet()) {
+            System.out.println();
+            print(entry.getKey(), 20);
+
+            for (final Registration r : registrations) {
+                if (entry.getValue().containsKey(r)) {
+                    print(String.valueOf(entry.getValue().get(r)), 10);
+                } else {
+                    print("", 10);
+                }
+            }
+        }
+    }
+
+    /**
+     * <p>
+     * Formats and print a message.
+     * </p>
+     *
+     * @param s the message
+     * @param len the length of the message (remaining chars will be let blank)
+     */
+    public void print(final String s, final int len) {
+        final char[] chars = new char[len];
+        System.arraycopy(s.toCharArray(), 0, chars, 0, s.length());
+        System.out.print(new String(chars) + '\t');
     }
 }
