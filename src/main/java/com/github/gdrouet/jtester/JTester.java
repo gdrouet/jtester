@@ -9,6 +9,7 @@ import javax.tools.JavaFileObject;
 import javax.tools.StandardJavaFileManager;
 import javax.tools.ToolProvider;
 import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
@@ -16,6 +17,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
+import java.io.PrintStream;
 import java.lang.reflect.Method;
 import java.net.MalformedURLException;
 import java.net.URL;
@@ -74,6 +76,11 @@ public class JTester {
         private final String step;
 
         /**
+         * The expectation object.
+         */
+        private final Expectation expectationImpl;
+
+        /**
          * <p>
          * Builds a new instance.
          * </p>
@@ -87,12 +94,13 @@ public class JTester {
         private Registration(final File test,
                              final File executor,
                              final String s,
-                             final File expectation,
+                             final Expectation expectation,
                              final File[] environment) {
             testFile = test;
             step = s;
             testExecutorFile = executor;
-            expectationFile = expectation;
+            expectationFile = new File(expectationDirectory, expectation.getFile());
+            expectationImpl = expectation;
             environmentFiles = environment;
         }
     }
@@ -152,12 +160,12 @@ public class JTester {
      *
      * @param endDirectory    the end of directory name containing the files to test with the specified executor
      * @param executorFile    the source file with main method
-     * @param expectationFile the file with expected result
+     * @param expectation     the object that checks an expected result
      * @param testClass       some additional classes to satisfy executor/test file dependencies
      */
     public void addRegistration(final String endDirectory,
                                 final String executorFile,
-                                final String expectationFile,
+                                final Expectation expectation,
                                 final String... testClass) {
         // Look for directory with all files related to a particular test
         for (final File file : testDirectory.listFiles()) {
@@ -176,7 +184,7 @@ public class JTester {
                         file,
                         new File(environmentDirectory, executorFile),
                         endDirectory,
-                        new File(expectationDirectory, expectationFile),
+                        expectation,
                         envFiles));
                 return;
             }
@@ -188,6 +196,14 @@ public class JTester {
     public void scanTest(final String[] args) throws IOException {
         // Execute all registered test for all discovered files to test
         for (final Registration registration : registrations) {
+
+            // Load expected result into a string for future comparison
+            final String expected;
+
+            try (final InputStream expectedStream = new FileInputStream(registration.expectationFile)) {
+                expected = IOUtils.readString(new InputStreamReader(expectedStream)).replace("\n", "").replace("\r", "");
+            }
+
             final File step = new File(registration.testFile.getParentFile(), registration.step);
             File env;
 
@@ -294,7 +310,14 @@ public class JTester {
 
                     // Execute compiled code
                     if (success) {
+
+                        // Intercept output to check the result
+                        final PrintStream std = System.out;
+                        final ByteArrayOutputStream os = new ByteArrayOutputStream();
+
                         try {
+                            System.setOut(new PrintStream(os));
+
                             // Create a new class loader with the directory
                             final ClassLoader loader = new URLClassLoader(new URL[] { env.toURL() });
 
@@ -306,15 +329,22 @@ public class JTester {
                             // Execute 'main' method
                             final Method main = clazz.getMethod("main", argTypes);
                             main.invoke(null, passedArgs);
-
-                            // TODO: interceptor System.out to compare result with expectation file content
-                            // TODO: make report file
                         } catch (MalformedURLException e) {
                             e.printStackTrace();
                         } catch (ClassNotFoundException e) {
                             e.printStackTrace();
                         } catch (Exception ex) {
                             ex.printStackTrace();
+                        } finally {
+                            System.setOut(std);
+                        }
+
+                        // Checks expected result
+                        final String result = new String(os.toByteArray()).replace("\n", "").replace("\r", "");
+
+                        // TODO: make report file
+                        if (!registration.expectationImpl.isResultExpected(expected, result)) {
+                            System.out.println("Test " + registration.step + " fails for " + student);
                         }
                     }
                 }
