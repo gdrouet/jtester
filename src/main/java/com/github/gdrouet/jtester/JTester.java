@@ -43,7 +43,7 @@ public class JTester {
      * A registration provides a state for testing purpose. The test is identified with a step name. This name must
      * be the end of the directory containing the file to test. An environment is provided as a list of files to compile
      * with an identified test file containing a 'main' method to execute. The result of the execution must be
-     * compared an expected value contained in a dedicated file.
+     * compared an expected value contained in a dedicated file. This file must be named with the name of the class to test.
      * </p>
      */
     private class Registration {
@@ -245,7 +245,7 @@ public class JTester {
                             // Rename class to test declaration/references with name in environment
                             while ((index = content.indexOf(fileTest, index + fileTest.length())) != -1) {
                                 // TODO : param replacement
-                                content = content.substring(0, index) + "Player" + content.substring(index + fileTest.length());
+                                content = content.substring(0, index) + registration.expectationFile.getName() + content.substring(index + fileTest.length());
                             }
 
                             // We put all classes in one file so we keep only the test executor class public
