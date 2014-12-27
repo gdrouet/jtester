@@ -3,6 +3,9 @@ package com.github.gdrouet.jtester;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+/**
+ * Checks that each array's string representation shows an ordered integers range.
+ */
 public class IncrementalArrayExpectation extends Expectation {
 
     /**
