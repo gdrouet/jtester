@@ -205,7 +205,7 @@ public class JTester {
      * @throws IOException if test fails
      */
     public void scanTest(final String[] args) throws IOException {
-        final Map<String, Map<Registration, Boolean>> results = new TreeMap<>();
+        final Map<String, Map<Registration, String>> results = new TreeMap<>();
         print("Student", 20);
 
         // Execute all registered test for all discovered files to test
@@ -300,6 +300,14 @@ public class JTester {
                         IOUtils.copyStreamIoe(new ByteArrayInputStream(compile.toString().getBytes()), os);
                     }
 
+                    // Report any failure
+                    Map<Registration, String> line = results.get(student);
+
+                    if (line == null) {
+                        line = new HashMap<>();
+                        results.put(student, line);
+                    }
+
                     // Compile source code into student's directory for current registration's test
                     final DiagnosticCollector<JavaFileObject> diagnostics = new DiagnosticCollector<>();
                     final JavaCompiler compiler = ToolProvider.getSystemJavaCompiler();
@@ -315,10 +323,7 @@ public class JTester {
 
                     // compilation fails
                     if (!success) {
-                        for (Diagnostic diagnostic : diagnostics.getDiagnostics())
-                            System.out.format("Error on line %d in %s%n",
-                                    diagnostic.getLineNumber(),
-                                    diagnostic.getSource());
+                        line.put(registration, String.format("L.%d", diagnostics.getDiagnostics().get(0).getLineNumber()));
                     }
 
                     fileManager.close();
@@ -345,8 +350,11 @@ public class JTester {
                             final Method main = clazz.getMethod("main", argTypes);
                             main.invoke(null, passedArgs);
                         } catch (MalformedURLException e) {
+                            line.put(registration, "MUE");
                         } catch (ClassNotFoundException e) {
+                            line.put(registration, "CNFE");
                         } catch (Exception ex) {
+                            line.put(registration, "Invoke");
                         } finally {
                             System.setOut(std);
                         }
@@ -355,21 +363,14 @@ public class JTester {
                         final String result = new String(os.toByteArray()).replace("\n", "").replace("\r", "");
 
                         // Report result
-                        Map<Registration, Boolean> line = results.get(student);
-
-                        if (line == null) {
-                            line = new HashMap<>();
-                            results.put(student, line);
-                        }
-
-                        line.put(registration, registration.expectationImpl.isResultExpected(expected, result));
+                        line.put(registration, String.valueOf(registration.expectationImpl.isResultExpected(expected, result)));
                     }
                 }
             }
         }
 
         // Print reported result
-        for (final Map.Entry<String, Map<Registration, Boolean>> entry : results.entrySet()) {
+        for (final Map.Entry<String, Map<Registration, String>> entry : results.entrySet()) {
             System.out.println();
             print(entry.getKey(), 20);
 
@@ -377,7 +378,7 @@ public class JTester {
                 if (entry.getValue().containsKey(r)) {
                     print(String.valueOf(entry.getValue().get(r)), 10);
                 } else {
-                    print("", 10);
+                    print("missing", 10);
                 }
             }
         }
