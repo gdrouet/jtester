@@ -21,8 +21,8 @@ public class CombinationOfTwoArraysExpectation extends Expectation {
      * {@inheritDoc}
      */
     @Override
-    public boolean isResultExpected(final String expected, final String result) {
-        final Matcher matcher = Pattern.compile(expected).matcher(result);
+    public boolean isResultExpected(final String expected, final String ... result) {
+        final Matcher matcher = Pattern.compile(expected).matcher(result[0]);
         int it = 0;
 
         while (matcher.find()) {

@@ -26,7 +26,14 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.TreeMap;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -142,6 +149,11 @@ public class JTester {
     private final List<Registration> registrations;
 
     /**
+     * Thread pool.
+     */
+    private final ExecutorService pool;
+
+    /**
      * <p>
      * Builds a new instance.
      * </p>
@@ -155,12 +167,20 @@ public class JTester {
         expectationDirectory = expectation;
         environmentDirectory = environment;
         registrations = new ArrayList<>();
+        pool = Executors.newSingleThreadExecutor();
 
         if (testDirectory.isFile()) {
             throw new IllegalArgumentException(test.toString() + " must be a directory");
         }
 
         // TODO test if files are directories and if they exist
+    }
+
+    /**
+     * Shutdown thread pool
+     */
+    public void shutdown() {
+        pool.shutdown();
     }
 
     /**
@@ -220,6 +240,7 @@ public class JTester {
 
         // Execute all registered test for all discovered files to test
         for (final Registration registration : registrations) {
+            final String executor = registration.testExecutorFile.getName();
             print(registration.step, 10);
 
             // Load expected result into a string for future comparison
@@ -245,78 +266,7 @@ public class JTester {
                     env = new File(step, student);
                     env.mkdirs();
 
-                    // Will append all the source code to compile here
-                    final StringBuilder compile = new StringBuilder();
-
-                    // Build the list of files to compile: environment + executor file
-                    final File[] compileFile = new File[registration.environmentFiles.length + 1];
-                    System.arraycopy(registration.environmentFiles, 0, compileFile, 0, compileFile.length - 1);
-                    compileFile[compileFile.length - 1] = registration.testExecutorFile;
-
-                    // Load source code from file to compile and make some changes
-                    for (final File f : compileFile) {
-                        String content;
-
-                        // Rename the class to test according to the name found in file to compile
-                        final boolean isFileToTest = fileTest.startsWith(f.getName().substring(0, f.getName().lastIndexOf('.')));
-
-                        // Read environment files except for the file to test which is substituted
-                        try (final InputStream src = new FileInputStream(isFileToTest ? file : f)) {
-                            content = IOUtils.readString(new InputStreamReader(src));
-                            int index;
-
-                            if (registration.excludeSysout) {
-                                if (!f.getName().equals(registration.testExecutorFile.getName())) {
-                                    while ((index = content.indexOf("System.out.println(")) != -1) {
-                                        content = content.substring(0, index) + content.substring(content.indexOf(';', index) + 1);
-                                    }
-                                }
-                            }
-
-                            // Remove any package declaration, we work in default package
-                            while ((index = content.indexOf("package")) != -1) {
-                                content = content.substring(0, index) + content.substring(content.indexOf(';', index) + 1);
-                            }
-
-                            // No java.* import is necessary, put others in top of file
-                            while ((index = content.indexOf("import")) != -1) {
-                                String importStatement = content.substring(index, content.indexOf(';', index) + 1);
-
-                                if (importStatement.contains("java.")) {
-                                    compile.insert(0, importStatement);
-                                }
-
-                                content = content.substring(0, index) + content.substring(content.indexOf(';', index) + 1);
-                            }
-
-                            index = -fileTest.length();
-
-                            // Rename class to test declaration/references with name in environment
-                            while ((index = content.indexOf(fileTest, index + fileTest.length())) != -1) {
-                                // TODO : param replacement
-                                content = content.substring(0, index) + registration.expectationFile.getName() + content.substring(index + fileTest.length());
-                            }
-
-                            // We put all classes in one file so we keep only the test executor class public
-                            if (!registration.testExecutorFile.getName().equals(f.getName())) {
-                                final String keyWord = "public class ";
-
-                                while ((index = content.indexOf(keyWord)) != -1) {
-                                    content = content.substring(0, index) + "class " + content.substring(index + keyWord.length());
-                                }
-                            }
-
-                            compile.append(content);
-                        }
-                    }
-
-                    // Copy source code to compile into a file with test executor name
-                    final String executor = registration.testExecutorFile.getName();
-                    final File path = new File(env, executor);
-
-                    try (final OutputStream os = new FileOutputStream(path)) {
-                        IOUtils.copyStreamIoe(new ByteArrayInputStream(compile.toString().getBytes()), os);
-                    }
+                    prepare(registration, fileTest, file, env, executor);
 
                     // Report any failure
                     Map<Registration, String> line = results.get(student);
@@ -326,62 +276,28 @@ public class JTester {
                         results.put(student, line);
                     }
 
-                    // Compile source code into student's directory for current registration's test
-                    final DiagnosticCollector<JavaFileObject> diagnostics = new DiagnosticCollector<>();
-                    final JavaCompiler compiler = ToolProvider.getSystemJavaCompiler();
-                    final StandardJavaFileManager fileManager = compiler.getStandardFileManager(diagnostics, null, null);
-                    final Iterable<? extends JavaFileObject> compilationUnits = fileManager.getJavaFileObjectsFromStrings(Arrays.asList(path.getAbsolutePath()));
-                    final JavaCompiler.CompilationTask task = compiler.getTask(null,
-                            fileManager,
-                            diagnostics,
-                            Arrays.asList("-d", env.getAbsolutePath()),
-                            null,
-                            compilationUnits);
-                    final boolean success = task.call();
-
-                    // compilation fails
-                    if (!success) {
-                        line.put(registration, String.format("L.%d", diagnostics.getDiagnostics().get(0).getLineNumber()));
-                    }
-
-                    fileManager.close();
+                    final boolean success = compile(env, line, registration, file);
 
                     // Execute compiled code
                     if (success) {
+                        final String[] result = new String[registration.expectationImpl.getNumberOfExecutions()];
+                        boolean failure = false;
 
-                        // Intercept output to check the result
-                        final PrintStream std = System.out;
-                        final ByteArrayOutputStream os = new ByteArrayOutputStream();
+                        for (int i = 0; i < result.length; i++)  {
+                            final Optional<String> opt = execute(args, env, registration, executor, line);
 
-                        try {
-                            System.setOut(new PrintStream(os));
-
-                            // Create a new class loader with the directory
-                            final ClassLoader loader = new URLClassLoader(new URL[] { env.toURL() });
-
-                            // Load in the classes
-                            final Class clazz = loader.loadClass(executor.substring(0, executor.lastIndexOf('.')));
-                            final  Class[] argTypes = {args.getClass(),};
-                            final Object[] passedArgs = {args};
-
-                            // Execute 'main' method
-                            final Method main = clazz.getMethod("main", argTypes);
-                            main.invoke(null, passedArgs);
-                        } catch (MalformedURLException e) {
-                            line.put(registration, "MUE");
-                        } catch (ClassNotFoundException e) {
-                            line.put(registration, "CNFE");
-                        } catch (Exception ex) {
-                            line.put(registration, "Invoke");
-                        } finally {
-                            System.setOut(std);
+                            if (opt.isPresent()) {
+                                result[i] = opt.get();
+                            } else {
+                                failure = true;
+                                break;
+                            }
                         }
 
-                        // Checks expected result
-                        final String result = new String(os.toByteArray()).replace("\n", "").replace("\r", "");
-
                         // Report result
-                        line.put(registration, String.valueOf(registration.expectationImpl.isResultExpected(expected, result)));
+                        if (!failure) {
+                            line.put(registration, String.valueOf(registration.expectationImpl.isResultExpected(expected, result)));
+                        }
                     }
                 }
             }
@@ -400,6 +316,196 @@ public class JTester {
                 }
             }
         }
+    }
+
+    /**
+     * <p>
+     * Prepare source to be compiled.
+     * </p>
+     *
+     * @param registration current registration
+     * @param fileTest the file to test
+     * @param file the file with same name as file to test in file to compile
+     * @param env the directory where sources are written
+     * @param executor the test executor class name
+     * @throws IOException if I/O error occurs
+     */
+    public void prepare(final Registration registration, final String fileTest, final File file, final File env, final String executor)
+            throws IOException {
+        // Will append all the source code to compile here
+        final StringBuilder compile = new StringBuilder();
+
+        // Build the list of files to compile: environment + executor file
+        final File[] compileFile = new File[registration.environmentFiles.length + 1];
+        System.arraycopy(registration.environmentFiles, 0, compileFile, 0, compileFile.length - 1);
+        compileFile[compileFile.length - 1] = registration.testExecutorFile;
+
+        // Load source code from file to compile and make some changes
+        for (final File f : compileFile) {
+            String content;
+
+            // Rename the class to test according to the name found in file to compile
+            final boolean isFileToTest = fileTest.startsWith(f.getName().substring(0, f.getName().lastIndexOf('.')));
+
+            // Read environment files except for the file to test which is substituted
+            try (final InputStream src = new FileInputStream(isFileToTest ? file : f)) {
+                content = IOUtils.readString(new InputStreamReader(src));
+                int index;
+
+                if (registration.excludeSysout) {
+                    if (!f.getName().equals(registration.testExecutorFile.getName())) {
+                        while ((index = content.indexOf("System.out.println(")) != -1) {
+                            content = content.substring(0, index) + content.substring(content.indexOf(';', index) + 1);
+                        }
+                    }
+                }
+
+                // Remove any package declaration, we work in default package
+                while ((index = content.indexOf("package")) != -1) {
+                    content = content.substring(0, index) + content.substring(content.indexOf(';', index) + 1);
+                }
+
+                // No java.* import is necessary, put others in top of file
+                while ((index = content.indexOf("import")) != -1) {
+                    String importStatement = content.substring(index, content.indexOf(';', index) + 1);
+
+                    if (importStatement.contains("java.")) {
+                        compile.insert(0, importStatement);
+                    }
+
+                    content = content.substring(0, index) + content.substring(content.indexOf(';', index) + 1);
+                }
+
+                index = -fileTest.length();
+
+                // Rename class to test declaration/references with name in environment
+                while ((index = content.indexOf(fileTest, index + fileTest.length())) != -1) {
+                    // TODO : param replacement
+                    content = content.substring(0, index) + registration.expectationFile.getName() + content.substring(index + fileTest.length());
+                }
+
+                // We put all classes in one file so we keep only the test executor class public
+                if (!registration.testExecutorFile.getName().equals(f.getName())) {
+                    final String keyWord = "public class ";
+
+                    while ((index = content.indexOf(keyWord)) != -1) {
+                        content = content.substring(0, index) + "class " + content.substring(index + keyWord.length());
+                    }
+                }
+
+                compile.append(content);
+            }
+        }
+
+        // Copy source code to compile into a file with test executor name
+        final File path = new File(env, executor);
+
+        try (final OutputStream os = new FileOutputStream(path)) {
+            IOUtils.copyStreamIoe(new ByteArrayInputStream(compile.toString().getBytes()), os);
+        }
+    }
+
+    /**
+     * <p>
+     * Perform compilation.
+     * </p>
+     *
+     * @param env the directory where compilation result is written
+     * @param line the report
+     * @param registration the current registration
+     * @param path the file to compile
+     *@return {@code true} in case of success, {@code false} otherwise
+     * @throws IOException if I/O error occurs
+     */
+    public boolean compile(final File env, final Map<Registration, String> line, final Registration registration, final File path)
+            throws IOException{
+        // Compile source code into student's directory for current registration's test
+        final DiagnosticCollector<JavaFileObject> diagnostics = new DiagnosticCollector<>();
+        final JavaCompiler compiler = ToolProvider.getSystemJavaCompiler();
+        final StandardJavaFileManager fileManager = compiler.getStandardFileManager(diagnostics, null, null);
+        final Iterable<? extends JavaFileObject> compilationUnits = fileManager.getJavaFileObjectsFromStrings(Arrays.asList(path.getAbsolutePath()));
+        final JavaCompiler.CompilationTask task = compiler.getTask(null,
+                fileManager,
+                diagnostics,
+                Arrays.asList("-d", env.getAbsolutePath()),
+                null,
+                compilationUnits);
+        final boolean success = task.call();
+
+        // compilation fails
+        if (!success) {
+            line.put(registration, String.format("L.%d", diagnostics.getDiagnostics().get(0).getLineNumber()));
+        }
+
+        fileManager.close();
+
+        return success;
+    }
+
+    /**
+     * <p>
+     * Execute a test for the given settings.
+     * </p>
+     *
+     * @param args the main arguments
+     * @param env the test file
+     * @param registration the regsitration
+     * @param executor the test executor
+     * @param line the report map
+     * @return the captured result
+     */
+    public Optional<String> execute(final String[] args,
+                                    final File env,
+                                    final Registration registration,
+                                    final String executor,
+                                    final Map<Registration, String> line) {// Intercept output to check the result
+        final PrintStream std = System.out;
+        final Future<Optional<? extends Object>> call = pool.submit(() -> {
+            final ByteArrayOutputStream os = new ByteArrayOutputStream();
+
+            try {
+                System.setOut(new PrintStream(os));
+
+                // Create a new class loader with the directory
+                final ClassLoader loader = new URLClassLoader(new URL[]{env.toURL()});
+
+                // Load in the classes
+                final Class clazz = loader.loadClass(executor.substring(0, executor.lastIndexOf('.')));
+                final Class[] argTypes = {args.getClass(),};
+                final Object[] passedArgs = {args};
+
+                // Execute 'main' method
+               final Method main = clazz.getMethod("main", argTypes);
+                main.invoke(null, passedArgs);
+                return Optional.of(new String(os.toByteArray()).replace("\n", "").replace("\r", ""));
+            } catch (MalformedURLException e) {
+                line.put(registration, "MUE");
+            } catch (ClassNotFoundException e) {
+                line.put(registration, "CNFE");
+            } catch (Exception ex) {
+                line.put(registration, "Invoke");
+            }
+
+            return Optional.empty();
+        });
+
+        try {
+            return (Optional<String>) call.get(5, TimeUnit.SECONDS);
+        } catch (InterruptedException ie) {
+            line.put(registration, "Thread");
+        } catch (ExecutionException ee) {
+            line.put(registration, "Thread");
+        }  catch (TimeoutException te) {
+            line.put(registration, "Timeout");
+        }  finally {
+            System.setOut(std);
+        }
+
+        if (call.isCancelled()) {
+            call.cancel(true);
+        }
+
+        return Optional.empty();
     }
 
     /**

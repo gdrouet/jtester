@@ -21,8 +21,8 @@ public class IncrementalArrayExpectation extends Expectation {
      * {@inheritDoc}
      */
     @Override
-    public boolean isResultExpected(final String expected, final String result) {
-        final Matcher matcher = Pattern.compile(expected).matcher(result);
+    public boolean isResultExpected(final String expected, final String ... result) {
+        final Matcher matcher = Pattern.compile(expected).matcher(result[0]);
 
         while (matcher.find()) {
             final String[] array = matcher.group(1).split(", ");

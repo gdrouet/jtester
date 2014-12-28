@@ -21,8 +21,8 @@ public class RandomOrderArrayExpectation extends Expectation {
      * {@inheritDoc}
      */
     @Override
-    public boolean isResultExpected(final String expected, final String result) {
-        final Matcher matcher = Pattern.compile(expected).matcher(result);
+    public boolean isResultExpected(final String expected, final String ... result) {
+        final Matcher matcher = Pattern.compile(expected).matcher(result[0]);
         boolean match = false;
 
         while (matcher.find()) {

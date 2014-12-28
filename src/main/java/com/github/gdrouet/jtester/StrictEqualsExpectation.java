@@ -18,7 +18,7 @@ public class StrictEqualsExpectation extends Expectation {
      * {@inheritDoc}
      */
     @Override
-    public boolean isResultExpected(final String e, final String s) {
-        return e.equals(s);
+    public boolean isResultExpected(final String e, final String ... s) {
+        return e.equals(s[0]);
     }
 }
