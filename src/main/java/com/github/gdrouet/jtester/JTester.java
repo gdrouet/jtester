@@ -2,7 +2,6 @@ package com.github.gdrouet.jtester;
 
 import com.github.wuic.util.IOUtils;
 
-import javax.tools.Diagnostic;
 import javax.tools.DiagnosticCollector;
 import javax.tools.JavaCompiler;
 import javax.tools.JavaFileObject;
@@ -84,6 +83,11 @@ public class JTester {
         private final Expectation expectationImpl;
 
         /**
+         * Exclude System.out.println not in executor file.
+         */
+        private final Boolean excludeSysout;
+
+        /**
          * <p>
          * Builds a new instance.
          * </p>
@@ -93,18 +97,21 @@ public class JTester {
          * @param s           the test identifier
          * @param expectation the expected result
          * @param environment the file set to compile
+         * @param es          exclude SYSOUT
          */
         private Registration(final File test,
                              final File executor,
                              final String s,
                              final Expectation expectation,
-                             final File[] environment) {
+                             final File[] environment,
+                             final Boolean es) {
             testFile = test;
             step = s;
             testExecutorFile = executor;
             expectationFile = new File(expectationDirectory, expectation.getFile());
             expectationImpl = expectation;
             environmentFiles = environment;
+            excludeSysout = es;
         }
     }
 
@@ -164,11 +171,13 @@ public class JTester {
      * @param endDirectory    the end of directory name containing the files to test with the specified executor
      * @param executorFile    the source file with main method
      * @param expectation     the object that checks an expected result
+     * @param excludeSysout   exclude System.out.println() statement not in test executor
      * @param testClass       some additional classes to satisfy executor/test file dependencies
      */
     public void addRegistration(final String endDirectory,
                                 final String executorFile,
                                 final Expectation expectation,
+                                final Boolean excludeSysout,
                                 final String... testClass) {
         // Look for directory with all files related to a particular test
         for (final File file : testDirectory.listFiles()) {
@@ -188,7 +197,8 @@ public class JTester {
                         new File(environmentDirectory, executorFile),
                         endDirectory,
                         expectation,
-                        envFiles));
+                        envFiles,
+                        excludeSysout));
                 return;
             }
         }
@@ -254,6 +264,14 @@ public class JTester {
                         try (final InputStream src = new FileInputStream(isFileToTest ? file : f)) {
                             content = IOUtils.readString(new InputStreamReader(src));
                             int index;
+
+                            if (registration.excludeSysout) {
+                                if (!f.getName().equals(registration.testExecutorFile.getName())) {
+                                    while ((index = content.indexOf("System.out.println(")) != -1) {
+                                        content = content.substring(0, index) + content.substring(content.indexOf(';', index) + 1);
+                                    }
+                                }
+                            }
 
                             // Remove any package declaration, we work in default package
                             while ((index = content.indexOf("package")) != -1) {
