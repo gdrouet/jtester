@@ -228,6 +228,19 @@ public class JTester {
 
     /**
      * <p>
+     * Check if the given argument if in the specified array.
+     * </p>
+     *
+     * @param args the arguments
+     * @param arg the argument to check
+     * @return {@code true} if argument is activate, {@code false otherwise}
+     */
+    public boolean argActivated(final String[] args, final String arg) {
+        return args.length == 0 || Arrays.toString(args).contains(arg);
+    }
+
+    /**
+     * <p>
      * Scans the testing directory and executed discovered tests.
      * </p>
      *
@@ -266,9 +279,11 @@ public class JTester {
                     env = new File(step, student);
                     env.mkdirs();
 
-                    prepare(registration, fileTest, file, env, executor);
+                    if (argActivated(args, "prepare")) {
+                        prepare(registration, fileTest, file, env, executor);
+                    }
 
-                    // Report any failure
+                    // / Report any failure
                     Map<Registration, String> line = results.get(student);
 
                     if (line == null) {
@@ -276,7 +291,7 @@ public class JTester {
                         results.put(student, line);
                     }
 
-                    final boolean success = compile(env, line, registration, file);
+                    final boolean success = argActivated(args, "compile") ? compile(env, line, registration, new File(env, executor)) : true;
 
                     // Execute compiled code
                     if (success) {
