@@ -401,11 +401,7 @@ public class JTester {
 
                 // We put all classes in one file so we keep only the test executor class public
                 if (!registration.testExecutorFile.getName().equals(f.getName())) {
-                    final String keyWord = "public class ";
-
-                    while ((index = content.indexOf(keyWord)) != -1) {
-                        content = content.substring(0, index) + "class " + content.substring(index + keyWord.length());
-                    }
+                    content = replace(replace(content, "public class ", "class "), "public interface ", "interface ");
                 }
 
                 compile.append(content);
@@ -418,6 +414,27 @@ public class JTester {
         try (final OutputStream os = new FileOutputStream(path)) {
             IOUtils.copyStreamIoe(new ByteArrayInputStream(compile.toString().getBytes()), os);
         }
+    }
+
+    /**
+     * <p>
+     * Replaces the given target by the specified replacement in a string.
+     * </p>
+     *
+     * @param content the content
+     * @param target the occurrence to replace
+     * @param replacement the string replacement
+     * @return the replaced content
+     */
+    public String replace(final String content, final String target, final String replacement) {
+        int index;
+        String retval = content;
+
+        while ((index = retval.indexOf(target)) != -1) {
+            retval = retval.substring(0, index) + replacement + retval.substring(index + target.length());
+        }
+
+        return retval;
     }
 
     /**
